@@ -21,10 +21,10 @@ hadoop fs -chown hive:hive /group3a/raw/v1/meta
 ```
 DROP TABLE IF EXISTS csv_table;
 CREATE EXTERNAL TABLE csv_table (
-`timestamp` string,
-dttm_utc string,
-value string,
-estimated string,
+`timestamp` float,
+dttm_utc timestamp,
+value float,
+estimated float,
 anomaly string 
 )
 ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
@@ -62,3 +62,14 @@ ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
 LOCATION '/group3a/raw/v1/meta'
 tblproperties("skip.header.line.count"="1");
 ```
+
+### HIVE DML
+
+#### Calculer la CdC totale des 100 sites (pas de temps 5 minutes)
+```
+DROP TABLE IF EXISTS CDC_ALL_SITES_5_MIN;
+CREATE TABLE CDC_ALL_SITES_5_MIN 
+AS SELECT dttm_utc, SUM(value) from data_view 
+GROUP BY (dttm_utc);
+```
+
