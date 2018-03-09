@@ -1,8 +1,21 @@
-Analyse de données - EnerNOC GreenButton 
+EnerNOC GreenButton - Data Analytics
 
-### Commandes Hadoop
+Below a detailed report of data analytics works operated on EnerNOC GreenButton data
 
-```
+
+# Table of Contents
+1. [Getting Data into Hadoop](#getting-data-into-hadoop)
+2. [Hive DDL](#hive-ddl)
+3. [Hive DML](#hive-dml)
+4. [Load Curve Calculation](#load-curve-calculation)
+	1. [Load Curve Calculation via HIVE](#load-curve-calculation-via-hive)
+	2. [Load Curve Calculation via SPARK](#load-curve-calculation-via-spark)
+
+### Getting Data into Hadoop
+
+After getting and unarchiving data into the cluster, we move all data files into HDFS
+ 
+```bash
 hadoop fs -mkdir -p /group3a/raw/v1/csv
 hadoop fs -mkdir -p /group3a/raw/v1/meta
 
@@ -11,13 +24,190 @@ hadoop fs -put ./meta/all_sites.csv /group3a/raw/v1/meta
 
 hadoop fs -chown hive:hdfs /group3a/raw/v1/csv
 hadoop fs -chown hive:hdfs /group3a/raw/v1/meta
-
 ```
 
 ### HIVE DDL
 
-IN REWORK
+We create our own database to avoid any issue using the default schema
+```sql
+CREATE DATABASE IF NOT EXISTS GROUP3A;
+```
+
+We start creating 2 external tables that point on CSV files
+
+```sql
+-- CDC records, external table as gateway to csv files
+DROP TABLE IF EXISTS group3a.cdc_records_init;
+CREATE EXTERNAL TABLE group3a.cdc_records_init (
+`timestamp` float,
+dttm_utc timestamp,
+value float,
+estimated float,
+anomaly string 
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+LOCATION '/group3a/raw/v1/csv'
+tblproperties("skip.header.line.count"="1");
+
+--- SITES METADATA ---
+DROP TABLE IF EXISTS group3a.sites;
+CREATE EXTERNAL TABLE group3a.sites (
+site_id int,
+industry string,
+sub_industry string,
+sq_ft string,
+lat string,
+lng string,
+time_zone string,
+tz_offset string
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+LOCATION '/group3a/raw/v1/meta'
+tblproperties("skip.header.line.count"="1");
+```
+
+We create then a table that combine all the data. Note that we'll create a intermediate table to fill in Site IDs.
+
+We choose ORC as storage format : data will be compacted, hence faster to query. 
+
+```sql
+-- cdc records tables stored in orc format
+DROP TABLE IF EXISTS group3a.cdc_records_orc;
+CREATE TABLE group3a.cdc_records_orc 
+(
+site_id int,
+`timestamp` float,
+dttm_utc timestamp,
+value float,
+estimated float,
+anomaly string 
+)
+STORED AS ORC;
+
+DROP TABLE IF EXISTS group3a.cdc_records_sites_orc;
+CREATE TABLE group3a.cdc_records_sites_orc
+(site_id int,
+`timestamp` float,
+dttm_utc timestamp,
+value float,
+estimated float,
+anomaly string,
+industry string,
+sub_industry string,
+sq_ft string,
+lat string,
+lng string,
+time_zone string,
+tz_offset string)
+STORED AS ORC;
+``` 
 
 ### HIVE DML
 
-IN REWORK
+Once Data created, we load data
+
+```sql
+INSERT OVERWRITE TABLE group3a.cdc_records_orc 
+SELECT cast(REGEXP_EXTRACT(INPUT__FILE__NAME, '.*/(.*)/([0-9]*)', 2) as int) AS site_id,
+`timestamp`,
+dttm_utc,
+value,
+estimated,
+anomaly	
+FROM group3a.cdc_records_init;
+
+INSERT OVERWRITE TABLE group3a.cdc_records_sites_orc
+SELECT
+cdc.site_id,
+cdc.`timestamp`,
+cdc.dttm_utc,
+cdc.value,
+cdc.estimated,
+cdc.anomaly,
+sit.industry,
+sit.sub_industry,
+sit.sq_ft,
+sit.lat,
+sit.lng,
+sit.time_zone,
+sit.tz_offset
+FROM group3a.cdc_records_orc cdc LEFT OUTER JOIN group3a.sites sit ON (cdc.site_id = sit.site_id);
+```
+
+### Load Curve Calculation
+We'll do this calculation following two approaches : HIVE and SPARK
+
+#### Load Curve Calculation via HIVE
+
+All Sites, Timeframe : 5 min 
+```sql
+DROP VIEW IF EXISTS group3a.cdc_all_sites_5min;
+CREATE VIEW group3a.cdc_all_sites_5min 
+AS SELECT dttm_utc, ROUND(SUM(value),4) as total_cdc
+FROM group3a.cdc_records_sites_orc
+GROUP BY dttm_utc
+ORDER BY dttm_utc ASC;
+```
+
+Average per industry, Timeframe : 5 min 
+```sql
+DROP VIEW IF EXISTS group3a.cdc_industry_avg_5min;
+CREATE VIEW group3a.cdc_industry_avg_5min
+AS SELECT industry, dttm_utc, ROUND(AVG(value),4) as avg_cdc
+FROM group3a.cdc_records_sites_orc
+GROUP BY industry,dttm_utc;
+```
+
+All Sites, Timeframe : week 
+```sql
+DROP VIEW IF EXISTS group3a.cdc_all_sites_week;
+CREATE VIEW group3a.cdc_all_sites_week
+AS SELECT WEEKOFYEAR(dttm_utc) as week, ROUND(SUM(value),4) as total_cdc
+FROM group3a.cdc_records_sites_orc
+GROUP BY WEEKOFYEAR(dttm_utc)
+ORDER BY week ASC;
+```
+
+Average per industry, Timeframe : week 
+```sql
+DROP VIEW IF EXISTS group3a.cdc_industry_avg_week;
+CREATE VIEW group3a.cdc_industry_avg_week
+AS SELECT industry, WEEKOFYEAR(dttm_utc) as week, ROUND(AVG(value),4) as avg_cdc
+FROM group3a.cdc_records_sites_orc
+GROUP BY industry,WEEKOFYEAR(dttm_utc);
+```
+
+#### Load Curve Calculation via SPARK
+
+Load Data into Data Frame
+```scala
+val df = spark.table("group3a.cdc_records_sites_orc").withColumn("week",weekofyear($"dttm_utc"))
+```
+
+All Sites, Timeframe : 5 min 
+```scala
+val cdc_all_5min = df.groupBy("dttm_utc").agg(round(sum("value"),4) as "total_cdc")
+```
+
+Average per industry, Timeframe : 5 min 
+```scala
+val cdc_inds_avg_5min = df.groupBy("industry","dttm_utc").agg(round(avg("value"),4) as "avg_cdc")
+```
+
+All Sites, Timeframe : week 
+```scala
+val cdc_all_week = df.groupBy("week").agg(round(sum("value"),4) as "total_cdc")
+```
+
+Average per industry, Timeframe : week 
+```scala
+val cdc_inds_avg_week = df.groupBy("industry","week").agg(round(avg("value"),4) as "avg_cdc")
+```
+
+### Industry Ranking
+
+
+### Highest Energy Day
+
+
+### Data Crunching
