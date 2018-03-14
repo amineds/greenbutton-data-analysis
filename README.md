@@ -181,7 +181,7 @@ GROUP BY industry,WEEKOFYEAR(dttm_utc);
 
 Load Data into Data Frame
 ```scala
-val df = spark.table("group3a.cdc_records_sites_orc").withColumn("week",weekofyear($"dttm_utc"))
+val df = spark.table("group3a.cdc_records_sites_orc").withColumn("week",weekofyear($"dttm_utc")).withColumn("day",date_format($"dttm_utc","dd.MM.yyyy"))
 ```
 
 All Sites, Timeframe : 5 min 
@@ -206,8 +206,49 @@ val cdc_inds_avg_week = df.groupBy("industry","week").agg(round(avg("value"),4) 
 
 ### Industry Ranking
 
+First let's calculate the sum of load curve and surface per industry and week
+
+```scala
+val cdc_inds_sum_week_sqft = df.groupBy("industry","week").agg(round(sum("value"),4).as("sum_cdc"),sum("sq_ft").as("sum_sq_ft"))
+```scala
+
+Creata a new column to store intensity
+
+```scala
+val cdc_inds_week_intensity = cdc_inds_sum_week_sqft.withColumn("intensity",round($"sum_cdc"/$"sum_sq_ft",4))
+```
+
+**Rank then industry comparing max intensity over the year**
+
+```scala
+val industry_intensity_rank = cdc_inds_week_intensity.groupBy("industry").agg(max("intensity").as("max_int")).orderBy("max_int")
+```
+
+Rank then industry comparing max intensity per week
+
+```scala
+val indus_intensity_week_rank = cdc_inds_week_intensity.groupBy("industry","week").agg(max("intensity").as("max_int_week")).orderBy("max_int_week")
+```
+
+Calculate season based on week number
+
+```scala
+val indus_intensity_week_rank_season = indus_intensity_week_rank.withColumn("season", when($"week" < 14, "WINTER").when($"week" < 27, "SPRING").when($"week" < 40, "SUMMER").otherwise("AUTOMN"))
+```
+
+**Rank then industry comparing max intensity per season**
+
+```scala
+val indus_intensity_season_rank = indus_intensity_week_rank_season.groupBy("industry","season").agg(max("max_int_week").as("max_int_season")).orderBy("season","max_int_season")
+```
 
 ### Highest Energy Day
 
+val cdc_site_day_sum = df.groupBy("site_id","day").agg(round(sum("value"),4).as("sum_value_site"))
+
+val cdc_site_day_sum_rep = cdc_site_day_sum.repartition("site_id")
+
+val cdc_site_high_day = cdc_site_day_sum_rep.groupBy("site_id","day").max("sum_value_site")
 
 ### Data Crunching
+
