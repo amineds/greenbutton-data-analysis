@@ -244,11 +244,11 @@ val indus_intensity_season_rank = indus_intensity_week_rank_season.groupBy("indu
 
 ### Highest Energy Day
 
+```scala
 val cdc_site_day_sum = df.groupBy("site_id","day").agg(round(sum("value"),4).as("sum_value_site"))
-
 val cdc_site_day_sum_rep = cdc_site_day_sum.repartition("site_id")
-
 val cdc_site_high_day = cdc_site_day_sum_rep.groupBy("site_id","day").max("sum_value_site")
+```
 
 ### Data Crunching
 
