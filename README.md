@@ -210,7 +210,7 @@ First let's calculate the sum of load curve and surface per industry and week
 
 ```scala
 val cdc_inds_sum_week_sqft = df.groupBy("industry","week").agg(round(sum("value"),4).as("sum_cdc"),sum("sq_ft").as("sum_sq_ft"))
-```scala
+```
 
 Creata a new column to store intensity
 
@@ -222,12 +222,14 @@ val cdc_inds_week_intensity = cdc_inds_sum_week_sqft.withColumn("intensity",roun
 
 ```scala
 val industry_intensity_rank = cdc_inds_week_intensity.groupBy("industry").agg(max("intensity").as("max_int")).orderBy("max_int")
+industry_intensity_rank.write.mode("overwrite").saveAsTable("group3a.industry_intensity_rank")
 ```
 
 Rank then industry comparing max intensity per week
 
 ```scala
 val indus_intensity_week_rank = cdc_inds_week_intensity.groupBy("industry","week").agg(max("intensity").as("max_int_week")).orderBy("max_int_week")
+indus_intensity_week_rank.write.mode("overwrite").saveAsTable("group3a.indus_intensity_week_rank")
 ```
 
 Calculate season based on week number
@@ -240,15 +242,16 @@ val indus_intensity_week_rank_season = indus_intensity_week_rank.withColumn("sea
 
 ```scala
 val indus_intensity_season_rank = indus_intensity_week_rank_season.groupBy("industry","season").agg(max("max_int_week").as("max_int_season")).orderBy("season","max_int_season")
+indus_intensity_season_rank.write.mode("overwrite").saveAsTable("group3a.indus_intensity_season_rank")
+val indus_intensity_season_rank_2 = indus_intensity_season_rank.withColumn("max_int_season_w",$"max_int_season"*1000)
+indus_intensity_season_rank_2.write.mode("overwrite").saveAsTable("group3a.indus_intensity_season_rank_2")
 ```
 
 ### Highest Energy Day
 
 ```scala
-val cdc_site_day_sum = df.groupBy("site_id","day").agg(round(sum("value"),4).as("sum_value_site"))
+val df2 = df.select("site_id","value","day")
+val cdc_site_day_sum = df2.groupBy("site_id","day").agg(round(sum("value"),4).as("sum_value_site"))
 val cdc_site_day_sum_rep = cdc_site_day_sum.repartition("site_id")
 val cdc_site_high_day = cdc_site_day_sum_rep.groupBy("site_id","day").max("sum_value_site")
 ```
-
-### Data Crunching
-
